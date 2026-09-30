@@ -1,6 +1,6 @@
 # SUBMISSION CHECKLIST
 
-**Location**: `C:\Users\sesa740202\OneDrive - Schneider Electric\Ravipersonal\azure-healthcare-assessment`
+**Location**: `C:\Users\Ravikumark\Ravipersonal\azure-healthcare-assessment`
 
 **Git Commit**: `b0546f4` — "Initial commit: Terraform IaC, GitHub Actions pipeline, and HIPAA design documentation"
 
