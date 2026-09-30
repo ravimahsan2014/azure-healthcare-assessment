@@ -82,6 +82,132 @@ If Private DNS zone is created but **not linked** to the VNet:
 
 ---
 
+## 3.5. Production Security Gate: Client Security Review Requirement
+
+### Requirement
+The client's security team must review and approve **every change before it reaches production**. This is a non-negotiable control for HIPAA compliance and organizational risk management.
+
+### Gate Implementation in Workflow
+
+**Workflow file** (`.github/workflows/terraform.yml`):
+```yaml
+apply-prod:
+  name: Apply - Prod
+  runs-on: ubuntu-latest
+  if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+  needs: [plan, apply-qa]
+  environment: prod-approval    # ← This triggers the approval gate
+  steps:
+    # ... deploy steps ...
+```
+
+**What `environment: prod-approval` does:**
+1. **Pauses the workflow** before the `apply-prod` job runs.
+2. **Requires manual approval** from designated GitHub repository administrators or team members.
+3. **Blocks automatic apply** — no `terraform apply` touches production without human sign-off.
+4. **Creates an audit trail** — GitHub records who approved, when, and any review comments.
+
+### Deployment Flow with Security Gate
+
+```
+1. Developer creates PR with Terraform changes
+                  ↓
+2. GitHub Actions runs `plan` job (dev, qa, prod)
+   - terraform init -backend=false
+   - terraform validate
+   - terraform plan (shows what would change)
+   - Posts plan summary to PR for review
+                  ↓
+3. Security/Platform team reviews plan in PR
+   - Assesses impact on data, networking, HIPAA controls
+   - Comments on the PR if changes needed
+   - Approves PR and merges to main
+                  ↓
+4. GitHub Actions triggers on merge to main
+   - apply-dev: Auto-applies to dev environment
+   - apply-qa: Auto-applies to QA after dev succeeds
+                  ↓
+5. apply-prod job starts but PAUSES at: environment: prod-approval
+   - GitHub displays approval prompt in Actions UI
+   - Requires designated approver(s) to click "Approve"
+   - If approved → prod apply proceeds
+   - If rejected → prod apply is skipped, workflow succeeds but prod unchanged
+                  ↓
+6. Approver reviews in GitHub environment protection UI
+   - Sees Terraform plan diff again
+   - Confirms this matches the reviewed PR
+   - Clicks "Review deployments" → "Approve"
+                  ↓
+7. apply-prod job continues and runs terraform apply
+   - Changes deployed to production
+   - Audit log shows approver name + timestamp
+```
+
+### How to Configure the Gate (Setup Steps)
+
+**No paid GitHub plan required.** This works on all GitHub tiers (free, pro, org).
+
+1. **Create the Environment in GitHub** (in repository Settings):
+   - Go to **Settings** → **Environments** → **New Environment**
+   - Name: `prod-approval`
+   - Click **Create environment**
+
+2. **Set Required Reviewers** (in Environment Protection Rules):
+   - Click on `prod-approval` environment
+   - Under "Deployment branches," select **"Specific branches"**
+   - Add `main` branch
+   - Under "Required reviewers," select team members or roles who can approve prod (e.g., Security Lead, Platform Engineering)
+   - Toggle **"Require a code review by someone other than the requester"** (optional but recommended)
+
+3. **Dismiss stale approvals** (optional):
+   - Enable **"Dismiss stale pull request approvals when new commits are pushed"**
+   - Ensures every merge triggers a fresh prod approval
+
+### What Happens at Each Stage
+
+| Stage | Role | Action | Approval? |
+|-------|------|--------|-----------|
+| **PR & Plan** | Developer | Opens PR; GitHub Actions runs plan on all 3 envs | No approval needed |
+| **PR Review** | Security Team | Reviews Terraform plan in PR comments; checks for data exposure, public endpoints, IAM changes | Reviews but doesn't "approve" yet |
+| **Merge** | Developer (or reviewer) | Merges PR to main if security agrees | No approval needed (GitHub PR approval ≠ deployment approval) |
+| **Dev/QA Apply** | Automation | GitHub Actions auto-applies to dev, then qa (no pause) | Approved by workflow conditions (`if: github.ref == 'refs/heads/main'`) |
+| **Prod Gate** | Security Lead / Platform Admin | **PAUSES WORKFLOW** waiting for approval | **REQUIRED: Must click "Approve" in GitHub** |
+| **Prod Apply** | Automation | Only after approval is granted, applies to prod | Confirmed by approver |
+
+### Symptom if Gate is Missing
+
+If `environment: prod-approval` is removed from the workflow:
+- Merge to main → dev + qa + prod all auto-apply within seconds
+- No pause, no review, no audit trail for prod changes
+- **Security requirement violated** (client needs review gate)
+- Any secrets, misconfigurations, or policy violations reach production undetected
+
+### Why This Approach
+
+- **Least privilege escalation**: Dev/QA are automatic (safe, tested); prod is gated (manual, reviewed).
+- **Audit trail**: GitHub logs every approval (who, when, approver comments).
+- **No extra tooling**: Native GitHub feature; works on free tier.
+- **Blocks infrastructure drift**: Every prod change is logged and approved; no manual `terraform apply` from laptops.
+- **Integrates with client review process**: Security team uses existing GitHub UI; no separate approval system needed.
+
+### Alternative Approaches (Why We Chose This)
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **GitHub Environment Protection (chosen)** | Native, audit trail, no extra cost, integrates with GitHub | Requires GitHub config step |
+| **Branch protection + required approval** | Simple | Doesn't gate **deployment**, only merge; applies to all branches |
+| **Manual step in workflow** | Flexible | Requires 3rd-party OIDC service (Auth0, Okta) |
+| **Azure Policy approval** | Azure-native | Doesn't integrate with source control; separate review system |
+| **Slack/email approval bot** | Familiar to ops teams | Audit trail outside GitHub; no link to PR context |
+
+We chose **GitHub Environment Protection** because it:
+1. Works on free GitHub tier (no cost).
+2. Audit trail is built-in (GitHub Activity Log).
+3. Approval is **blocking** (workflow cannot proceed without it).
+4. Integrates seamlessly with the PR review process.
+
+---
+
 ## 4. HIPAA Controls in Our Design
 
 ### Control 1: Encryption in Transit (HIPAA §164.312(e)(2)(ii))
